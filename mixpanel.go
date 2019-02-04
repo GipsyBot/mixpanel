@@ -42,6 +42,9 @@ type Mixpanel interface {
 	// Set properties for a mixpanel user.
 	Update(distinctId string, u *Update) error
 
+	// Performs multiple updates for a mixpanel user.
+	BatchUpdate(distinctId string, updates []*Update) error
+
 	Alias(distinctId, newId string) error
 }
 
