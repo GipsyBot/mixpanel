@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -127,6 +128,23 @@ func (m *mixpanel) Track(distinctId, eventName string, e *Event) error {
 // Updates a user in mixpanel. See
 // https://mixpanel.com/help/reference/http#people-analytics-updates
 func (m *mixpanel) Update(distinctId string, u *Update) error {
+	params := m.prepareUpdate(distinctId, u)
+
+	autoGeolocate := u.IP == ""
+
+	return m.send("engage", params, autoGeolocate)
+}
+
+func (m *mixpanel) BatchUpdate(distinctId string, updates []*Update) error {
+	var allParams []map[string]interface{}
+	for i := range updates {
+		allParams = append(allParams, m.prepareUpdate(distinctId, updates[i]))
+	}
+
+	return m.sendBatch("engage", allParams)
+}
+
+func (m *mixpanel) prepareUpdate(distinctId string, u *Update) map[string]interface{} {
 	params := map[string]interface{}{
 		"$token":       m.Token,
 		"$distinct_id": distinctId,
@@ -142,10 +160,7 @@ func (m *mixpanel) Update(distinctId string, u *Update) error {
 	}
 
 	params[u.Operation] = u.Properties
-
-	autoGeolocate := u.IP == ""
-
-	return m.send("engage", params, autoGeolocate)
+	return params
 }
 
 func (m *mixpanel) to64(data []byte) string {
@@ -171,6 +186,41 @@ func (m *mixpanel) send(eventType string, params interface{}, autoGeolocate bool
 
 	resp, err := m.Client.Get(url)
 
+	if err != nil {
+		return wrapErr(err)
+	}
+
+	defer resp.Body.Close()
+
+	body, bodyErr := ioutil.ReadAll(resp.Body)
+
+	if bodyErr != nil {
+		return wrapErr(bodyErr)
+	}
+
+	if strBody := string(body); strBody != "1" && strBody != "1\n" {
+		return wrapErr(&ErrTrackFailed{Body: strBody, Resp: resp})
+	}
+
+	return nil
+}
+
+func (m *mixpanel) sendBatch(eventType string, params interface{}) error {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+
+	urlToCall := m.ApiURL + "/" + eventType
+
+	wrapErr := func(err error) error {
+		return &MixpanelError{URL: urlToCall, Err: err}
+	}
+
+	values := url.Values{}
+	values.Set("data", m.to64(data))
+
+	resp, err := m.Client.PostForm(urlToCall, values)
 	if err != nil {
 		return wrapErr(err)
 	}
